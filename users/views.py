@@ -9,6 +9,9 @@ from django.contrib.auth import get_user_model, login, logout
 from django.utils import timezone
 from datetime import timedelta
 import random
+import os
+from twilio.rest import Client
+from django.conf import settings
 
 from .models import PhoneToken
 from .serializers import (
@@ -20,6 +23,31 @@ from .serializers import (
 )
 
 User = get_user_model()
+
+# Twilio configuration
+TWILIO_ACCOUNT_SID = os.environ.get('TWILIO_ACCOUNT_SID')
+TWILIO_AUTH_TOKEN = os.environ.get('TWILIO_AUTH_TOKEN')
+TWILIO_PHONE_NUMBER = os.environ.get('TWILIO_PHONE_NUMBER')
+
+def send_otp_via_sms(phone_number, otp):
+    """
+    Send OTP via SMS using Twilio
+    Returns tuple (bool, str) - (success, message)
+    """
+    try:
+        if not all([TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER]):
+            # Fall back to development mode if Twilio is not configured
+            return False, "Twilio credentials not configured. OTP not sent."
+            
+        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        message = client.messages.create(
+            body=f"Your verification code is {otp}. Valid for 10 minutes.",
+            from_=TWILIO_PHONE_NUMBER,
+            to=phone_number
+        )
+        return True, message.sid
+    except Exception as e:
+        return False, str(e)
 
 class SendOTPView(APIView):
     """Send OTP to the provided phone number for login verification"""
@@ -48,12 +76,17 @@ class SendOTPView(APIView):
                 otp=otp
             )
             
-            # TODO: Integrate with SMS service to send OTP
-            # For development, returning OTP in response
-            return Response({
-                "detail": "OTP sent successfully",
-                "otp": otp  # Remove this in production
-            })
+            # Send OTP via SMS
+            sms_sent, message = send_otp_via_sms(phone_number, otp)
+            
+            response_data = {"detail": "OTP sent successfully"}
+            
+            # For development, add the OTP to the response if SMS failed
+            if not sms_sent:
+                response_data["otp"] = otp
+                response_data["sms_status"] = "SMS sending failed: " + message
+                
+            return Response(response_data)
         
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -141,12 +174,20 @@ class RegisterUserView(APIView):
                 otp=otp
             )
             
-            # TODO: Integrate with SMS service to send OTP
-            return Response({
+            # Send OTP via SMS
+            sms_sent, message = send_otp_via_sms(user.phone_number, otp)
+            
+            response_data = {
                 "detail": "User registered successfully. Verify your phone number with the OTP.",
-                "user": UserSerializer(user).data,
-                "otp": otp  # Remove in production
-            }, status=status.HTTP_201_CREATED)
+                "user": UserSerializer(user).data
+            }
+            
+            # For development, add the OTP to the response if SMS failed
+            if not sms_sent:
+                response_data["otp"] = otp
+                response_data["sms_status"] = "SMS sending failed: " + message
+                
+            return Response(response_data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class LogoutView(APIView):
