@@ -1,2 +1,5 @@
 env/
 .env
+backends/__pycache__
+users/__pycache__
+customers/__pycache__

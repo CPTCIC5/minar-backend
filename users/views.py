@@ -10,7 +10,8 @@ from django.utils import timezone
 from datetime import timedelta
 import random
 import os
-from twilio.rest import Client
+import requests
+import json
 from django.conf import settings
 
 from .models import PhoneToken
@@ -24,28 +25,54 @@ from .serializers import (
 
 User = get_user_model()
 
-# Twilio configuration
-TWILIO_ACCOUNT_SID = os.environ.get('TWILIO_ACCOUNT_SID')
-TWILIO_AUTH_TOKEN = os.environ.get('TWILIO_AUTH_TOKEN')
-TWILIO_PHONE_NUMBER = os.environ.get('TWILIO_PHONE_NUMBER')
+# MSG91 configuration
+MSG91_AUTH_KEY = os.environ.get('MSG91_AUTH_KEY')
+MSG91_TEMPLATE_ID = os.environ.get('MSG91_TEMPLATE_ID')
+MSG91_SENDER_ID = os.environ.get('MSG91_SENDER_ID', 'OTPSMS')  # Default sender ID
 
 def send_otp_via_sms(phone_number, otp):
     """
-    Send OTP via SMS using Twilio
+    Send OTP via SMS using MSG91
     Returns tuple (bool, str) - (success, message)
     """
     try:
-        if not all([TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER]):
-            # Fall back to development mode if Twilio is not configured
-            return False, "Twilio credentials not configured. OTP not sent."
+        if not MSG91_AUTH_KEY or not MSG91_TEMPLATE_ID:
+            # Fall back to development mode if MSG91 is not configured
+            return False, "MSG91 credentials not configured. OTP not sent."
+        
+        # Make sure phone number format is correct for India (remove + if present)
+        if phone_number.startswith('+'):
+            phone_number = phone_number[1:]
             
-        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-        message = client.messages.create(
-            body=f"Your verification code is {otp}. Valid for 10 minutes.",
-            from_=TWILIO_PHONE_NUMBER,
-            to=phone_number
-        )
-        return True, message.sid
+        # MSG91 API URL for sending OTP
+        url = "https://api.msg91.com/api/v5/otp"
+        
+        # Prepare headers
+        headers = {
+            "Content-Type": "application/json",
+            "authkey": MSG91_AUTH_KEY
+        }
+        
+        # Prepare data
+        payload = {
+            "template_id": MSG91_TEMPLATE_ID,
+            "mobile": phone_number,
+            "OTP": otp,
+            "sender": MSG91_SENDER_ID
+        }
+        
+        # Make API request
+        response = requests.post(url, headers=headers, data=json.dumps(payload))
+        
+        # Check if the request was successful
+        if response.status_code == 200:
+            response_data = response.json()
+            if response_data.get("type") == "success":
+                return True, "OTP sent successfully"
+        
+        # If we get here, something went wrong
+        return False, f"Failed to send OTP: {response.text}"
+            
     except Exception as e:
         return False, str(e)
 
@@ -221,4 +248,3 @@ class UserViewSet(viewsets.ModelViewSet):
             request.user.save()
             return Response({"detail": "Device token updated successfully"})
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-

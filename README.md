@@ -38,20 +38,24 @@ python manage.py migrate
 python manage.py runserver
 ```
 
-## Twilio Integration
+## MSG91 Integration for SMS OTP
 
-This system uses Twilio for sending SMS OTPs. You need to:
+This system uses MSG91 for sending SMS OTPs, which works well in India. You need to:
 
-1. Sign up for a [Twilio account](https://www.twilio.com/try-twilio)
-2. Get your Account SID and Auth Token from the Twilio Console
-3. Purchase or use a trial phone number
+1. Sign up for a [MSG91 account](https://msg91.com/)
+2. Create an OTP template in MSG91 dashboard with a variable for the OTP code
+3. Get your Auth Key and Template ID from the MSG91 dashboard
 4. Add these values to your `.env` file:
 
 ```
-TWILIO_ACCOUNT_SID=your_twilio_account_sid
-TWILIO_AUTH_TOKEN=your_twilio_auth_token
-TWILIO_PHONE_NUMBER=your_twilio_phone_number
+MSG91_AUTH_KEY=your_msg91_auth_key
+MSG91_TEMPLATE_ID=your_msg91_template_id
+MSG91_SENDER_ID=OTPSMS  # You can customize this
 ```
+
+### Creating an OTP Template in MSG91
+When creating a template in MSG91, make sure to include the variable `{{otp}}` in your message. 
+Example template: "Your verification code is {{otp}}. Valid for 10 minutes."
 
 ## API Endpoints
 
@@ -70,6 +74,6 @@ TWILIO_PHONE_NUMBER=your_twilio_phone_number
 
 ## Development Mode
 
-If Twilio credentials are not configured, the system will work in development mode:
+If MSG91 credentials are not configured, the system will work in development mode:
 - OTPs are returned in the API response
 - A warning message is shown indicating SMS sending failed 
