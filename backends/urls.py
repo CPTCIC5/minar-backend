@@ -7,7 +7,6 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/auth/', include('users.urls')),
     path('api/', include('customer.urls')),
-    path('api/auth/password_reset/', include('django_rest_passwordreset.urls', namespace='password_reset')),
     path('api-auth/', include('rest_framework.urls', namespace='rest_framework')),
 ]
 urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)

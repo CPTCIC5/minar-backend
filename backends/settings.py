@@ -27,8 +27,9 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'rest_framework'
+    'rest_framework',
     "corsheaders",
+    'users'
 ]
 
 WSGI_APPLICATION = 'backends.wsgi.application'
@@ -53,7 +54,6 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
-AUTH_USER_MODEL= 'users.User'
 AUTHENTICATION_BACKENDS = [
     "django.contrib.auth.backends.ModelBackend",
 ]
@@ -220,3 +220,21 @@ CORS_ALLOWED_ORIGINS = CSRF_TRUSTED_ORIGINS
 CSRF_ALLOWED_ORIGINS = CORS_ALLOWED_ORIGINS
 CORS_ALLOW_ALL_ORIGINS = True
 CORS_ALLOW_CREDENTIALS = True
+
+# Frontend URL for email verification links
+FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
+
+CACHES = {
+    "default": {
+        "BACKEND": "django_redis.cache.RedisCache",
+        "LOCATION": "redis://127.0.0.1:6379/1",
+        "OPTIONS": {
+            "CLIENT_CLASS": "django_redis.client.DefaultClient",
+        }
+    },
+    'localcache': {
+        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        'LOCATION': 'unique-snowflake',
+    },
+}
+DJANGO_REDIS_IGNORE_EXCEPTIONS = True

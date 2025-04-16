@@ -5,169 +5,130 @@ from rest_framework.response import Response
 from rest_framework.decorators import action
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.permissions import AllowAny, IsAuthenticated
-from django.contrib.auth import get_user_model, login, logout
+from django.contrib.auth import get_user_model, login, logout, authenticate, update_session_auth_hash
 from django.utils import timezone
 from datetime import timedelta
-import random
-import os
-import requests
-import json
+import uuid
 from django.conf import settings
+from django.core.mail import send_mail
+from django.template.loader import render_to_string
+from django.urls import reverse
 
-from .models import PhoneToken
 from .serializers import (
-    UserSerializer, 
-    PhoneNumberSerializer, 
-    OTPVerificationSerializer,
+    UserSerializer,
     UserRegistrationSerializer,
-    DeviceTokenUpdateSerializer
+    UserLoginSerializer,
+    EmailVerificationSerializer,
+    DeviceTokenUpdateSerializer,
+    PasswordResetRequestSerializer,
+    PasswordResetConfirmSerializer,
+    PasswordChangeSerializer
 )
 
 User = get_user_model()
 
-# MSG91 configuration
-MSG91_AUTH_KEY = os.environ.get('MSG91_AUTH_KEY')
-MSG91_TEMPLATE_ID = os.environ.get('MSG91_TEMPLATE_ID')
-MSG91_SENDER_ID = os.environ.get('MSG91_SENDER_ID', 'OTPSMS')  # Default sender ID
-
-def send_otp_via_sms(phone_number, otp):
-    """
-    Send OTP via SMS using MSG91
-    Returns tuple (bool, str) - (success, message)
-    """
-    try:
-        if not MSG91_AUTH_KEY or not MSG91_TEMPLATE_ID:
-            # Fall back to development mode if MSG91 is not configured
-            return False, "MSG91 credentials not configured. OTP not sent."
-        
-        # Make sure phone number format is correct for India (remove + if present)
-        if phone_number.startswith('+'):
-            phone_number = phone_number[1:]
-            
-        # MSG91 API URL for sending OTP
-        url = "https://api.msg91.com/api/v5/otp"
-        
-        # Prepare headers
-        headers = {
-            "Content-Type": "application/json",
-            "authkey": MSG91_AUTH_KEY
-        }
-        
-        # Prepare data
-        payload = {
-            "template_id": MSG91_TEMPLATE_ID,
-            "mobile": phone_number,
-            "OTP": otp,
-            "sender": MSG91_SENDER_ID
-        }
-        
-        # Make API request
-        response = requests.post(url, headers=headers, data=json.dumps(payload))
-        
-        # Check if the request was successful
-        if response.status_code == 200:
-            response_data = response.json()
-            if response_data.get("type") == "success":
-                return True, "OTP sent successfully"
-        
-        # If we get here, something went wrong
-        return False, f"Failed to send OTP: {response.text}"
-            
-    except Exception as e:
-        return False, str(e)
-
-class SendOTPView(APIView):
-    """Send OTP to the provided phone number for login verification"""
+class RegisterUserView(APIView):
+    """Register a new user with email, phone, and other details"""
     permission_classes = [AllowAny]
     
     def post(self, request):
-        serializer = PhoneNumberSerializer(data=request.data)
+        serializer = UserRegistrationSerializer(data=request.data)
         if serializer.is_valid():
-            phone_number = serializer.validated_data['phone_number']
+            user = serializer.save()
+            
+            # Send verification email
+            self.send_verification_email(user)
+            
+            return Response({
+                "detail": "User registered successfully. Please check your email to verify your account.",
+                "user": UserSerializer(user).data
+            }, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    def send_verification_email(self, user):
+        """Send verification email to the user"""
+        token = user.email_verification_token
+        verification_url = f"{settings.FRONTEND_URL}/verify-email?token={token}"
+        
+        subject = "Verify Your Email"
+        message = f"""
+        Hi {user.first_name},
+        
+        Thank you for registering with us. Please verify your email by clicking the link below:
+        
+        {verification_url}
+        
+        This link will expire in 24 hours.
+        
+        If you did not register for an account, please ignore this email.
+        """
+        
+        try:
+            print('aaya idhr')
+            send_mail(
+                subject=subject,
+                message=message,
+                from_email=settings.EMAIL_HOST_USER,
+                recipient_list=[user.email],
+                fail_silently=False,
+            )
+        except Exception as e:
+            # Log the error but don't fail the registration
+            print(f"Failed to send verification email: {str(e)}")
+
+class VerifyEmailView(APIView):
+    """Verify user's email with token"""
+    permission_classes = [AllowAny]
+    
+    def post(self, request):
+        serializer = EmailVerificationSerializer(data=request.data)
+        if serializer.is_valid():
+            token = serializer.validated_data['token']
             
             try:
-                user = User.objects.get(phone_number=phone_number)
+                user = User.objects.get(email_verification_token=token, email_verified=False)
             except User.DoesNotExist:
                 return Response(
-                    {"detail": "User with this phone number does not exist"}, 
-                    status=status.HTTP_404_NOT_FOUND
+                    {"detail": "Invalid or expired verification token"}, 
+                    status=status.HTTP_400_BAD_REQUEST
                 )
             
-            # Generate OTP
-            otp = str(random.randint(100000, 999999))
+            # Mark email as verified and remove token
+            user.email_verified = True
+            user.email_verification_token = None
+            user.save()
             
-            # Save OTP
-            phone_token = PhoneToken.objects.create(
-                user=user,
-                phone_number=phone_number,
-                otp=otp
-            )
-            
-            # Send OTP via SMS
-            sms_sent, message = send_otp_via_sms(phone_number, otp)
-            
-            response_data = {"detail": "OTP sent successfully"}
-            
-            # For development, add the OTP to the response if SMS failed
-            if not sms_sent:
-                response_data["otp"] = otp
-                response_data["sms_status"] = "SMS sending failed: " + message
-                
-            return Response(response_data)
+            return Response({"detail": "Email successfully verified"})
         
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class LoginView(APIView):
-    """OTP-based login view"""
+    """Email and password based login"""
     permission_classes = [AllowAny]
     authentication_classes = [SessionAuthentication]
     
     def post(self, request):
-        serializer = OTPVerificationSerializer(data=request.data)
+        serializer = UserLoginSerializer(data=request.data)
         if serializer.is_valid():
-            phone_number = serializer.validated_data['phone_number']
-            otp = serializer.validated_data['otp']
+            email = serializer.validated_data['email']
+            password = serializer.validated_data['password']
             
-            try:
-                phone_token = PhoneToken.objects.filter(
-                    phone_number=phone_number,
-                    used=False
-                ).latest('timestamp')
-            except PhoneToken.DoesNotExist:
+            user = authenticate(request, username=email, password=password)
+            
+            if user is None:
                 return Response(
-                    {"detail": "No valid OTP found"}, 
-                    status=status.HTTP_400_BAD_REQUEST
+                    {"detail": "Invalid email or password"}, 
+                    status=status.HTTP_401_UNAUTHORIZED
                 )
             
-            if timezone.now() > phone_token.timestamp + timedelta(minutes=10):
+            if not user.email_verified:
+                # Resend verification email
+                self.resend_verification_email(user)
                 return Response(
-                    {"detail": "OTP has expired"}, 
-                    status=status.HTTP_400_BAD_REQUEST
+                    {"detail": "Email not verified. Verification email has been resent."},
+                    status=status.HTTP_401_UNAUTHORIZED
                 )
             
-            if otp != phone_token.otp:
-                phone_token.attempts += 1
-                phone_token.save()
-                if phone_token.attempts >= 3:
-                    phone_token.used = True
-                    phone_token.save()
-                    return Response(
-                        {"detail": "Too many failed attempts. Request new OTP"}, 
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
-                return Response(
-                    {"detail": "Invalid OTP"}, 
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            
-            phone_token.used = True
-            phone_token.save()
-            
-            user = phone_token.user
-            if not user.is_phone_verified:
-                user.is_phone_verified = True
-                user.save()
-                
             login(request, user)
             
             return Response({
@@ -176,46 +137,41 @@ class LoginView(APIView):
             })
         
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-class RegisterUserView(APIView):
-    """Register a new user with required information"""
-    permission_classes = [AllowAny]
     
-    def post(self, request):
-        serializer = UserRegistrationSerializer(data=request.data)
-        if serializer.is_valid():
-            # Create user with unusable password since we're using OTP
-            user = User.objects.create_user(
-                **serializer.validated_data,
-                password=None  # No password needed
+    def resend_verification_email(self, user):
+        """Resend verification email to the user"""
+        # Regenerate token if needed
+        if not user.email_verification_token:
+            user.email_verification_token = uuid.uuid4()
+            user.save()
+        
+        token = user.email_verification_token
+        verification_url = f"{settings.FRONTEND_URL}/verify-email?token={token}"
+        
+        subject = "Verify Your Email"
+        message = f"""
+        Hi {user.first_name},
+        
+        Please verify your email by clicking the link below:
+        
+        {verification_url}
+        
+        This link will expire in 24 hours.
+        
+        If you did not register for an account, please ignore this email.
+        """
+        
+        try:
+            send_mail(
+                subject=subject,
+                message=message,
+                from_email=settings.EMAIL_HOST_USER,
+                recipient_list=[user.email],
+                fail_silently=False,
             )
-            user.set_unusable_password()
-            
-            # Generate OTP for phone verification
-            otp = str(random.randint(100000, 999999))
-            
-            # Save OTP
-            phone_token = PhoneToken.objects.create(
-                user=user,
-                phone_number=user.phone_number,
-                otp=otp
-            )
-            
-            # Send OTP via SMS
-            sms_sent, message = send_otp_via_sms(user.phone_number, otp)
-            
-            response_data = {
-                "detail": "User registered successfully. Verify your phone number with the OTP.",
-                "user": UserSerializer(user).data
-            }
-            
-            # For development, add the OTP to the response if SMS failed
-            if not sms_sent:
-                response_data["otp"] = otp
-                response_data["sms_status"] = "SMS sending failed: " + message
-                
-            return Response(response_data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            # Log the error but don't fail the request
+            print(f"Failed to send verification email: {str(e)}")
 
 class LogoutView(APIView):
     """Log out the currently authenticated user"""
@@ -224,6 +180,112 @@ class LogoutView(APIView):
     def post(self, request):
         logout(request)
         return Response({"detail": "Successfully logged out"})
+
+class PasswordResetRequestView(APIView):
+    """Request password reset via email"""
+    permission_classes = [AllowAny]
+    
+    def post(self, request):
+        serializer = PasswordResetRequestSerializer(data=request.data)
+        if serializer.is_valid():
+            email = serializer.validated_data['email']
+            
+            try:
+                user = User.objects.get(email=email)
+            except User.DoesNotExist:
+                # Don't reveal that the user doesn't exist
+                return Response({"detail": "Password reset email sent if account exists"})
+            
+            # Generate token
+            token = uuid.uuid4()
+            user.password_reset_token = token
+            user.save()
+            
+            # Send password reset email
+            reset_url = f"{settings.FRONTEND_URL}/reset-password?token={token}"
+            
+            subject = "Reset Your Password"
+            message = f"""
+            Hi {user.first_name},
+            
+            We received a request to reset your password. Click the link below to reset it:
+            
+            {reset_url}
+            
+            This link will expire in 24 hours.
+            
+            If you did not request a password reset, please ignore this email.
+            """
+            
+            try:
+                send_mail(
+                    subject=subject,
+                    message=message,
+                    from_email=settings.EMAIL_HOST_USER,
+                    recipient_list=[user.email],
+                    fail_silently=False,
+                )
+            except Exception as e:
+                # Log the error but don't reveal it to the user
+                print(f"Failed to send password reset email: {str(e)}")
+            
+            return Response({"detail": "Password reset email sent if account exists"})
+        
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+class PasswordResetConfirmView(APIView):
+    """Reset password using token"""
+    permission_classes = [AllowAny]
+    
+    def post(self, request):
+        serializer = PasswordResetConfirmSerializer(data=request.data)
+        if serializer.is_valid():
+            token = serializer.validated_data['token']
+            new_password = serializer.validated_data['new_password']
+            
+            try:
+                user = User.objects.get(password_reset_token=token)
+            except User.DoesNotExist:
+                return Response(
+                    {"detail": "Invalid or expired token"}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Set new password and remove token
+            user.set_password(new_password)
+            user.password_reset_token = None
+            user.save()
+            
+            return Response({"detail": "Password reset successful"})
+        
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+class PasswordChangeView(APIView):
+    """Change password when user is logged in"""
+    permission_classes = [IsAuthenticated]
+    
+    def post(self, request):
+        serializer = PasswordChangeSerializer(data=request.data)
+        if serializer.is_valid():
+            user = request.user
+            
+            # Check current password
+            if not user.check_password(serializer.validated_data['current_password']):
+                return Response(
+                    {"detail": "Current password is incorrect"}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Set new password
+            user.set_password(serializer.validated_data['new_password'])
+            user.save()
+            
+            # Update session to prevent logout
+            update_session_auth_hash(request, user)
+            
+            return Response({"detail": "Password changed successfully"})
+        
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class UserViewSet(viewsets.ModelViewSet):
     """ViewSet for viewing and updating user information"""
