@@ -58,7 +58,11 @@ AUTHENTICATION_BACKENDS = [
     "django.contrib.auth.backends.ModelBackend",
 ]
 
-CSRF_COOKIE_SECURE= False
+CSRF_COOKIE_SECURE= True
+CSRF_COOKIE_SAMESITE = 'None'
+CSRF_USE_SESSIONS = False
+CSRF_COOKIE_HTTPONLY = False
+
 
 ROOT_URLCONF = 'backends.urls'
 
@@ -189,10 +193,10 @@ REST_FRAMEWORK = {
         'DEFAULT_PERMISSION_CLASSES': [
             'rest_framework.permissions.AllowAny',
         ],
-        'DEFAULT_AUTHENTICATION_CLASSES': (
+        'DEFAULT_AUTHENTICATION_CLASSES': [
             #'rest_framework.authentication.BasicAuthentication',  # enables simple command line authentication
             'rest_framework.authentication.SessionAuthentication'
-        )
+        ]
     }
 
 CORS_ALLOW_HEADERS = [
@@ -210,6 +214,7 @@ CSRF_TRUSTED_ORIGINS = [
     "https://193a-2405-201-3023-68e8-99ba-718-4d2c-e83b.ngrok-free.app",
     'http://localhost:3000',
     "http://localhost:8000",
+    "http://127.0.0.1:8000",
     'http://localhost:5173',
     'https://polite-awake-bobcat.ngrok-free.app',
     'https://kleenestar-frontend.vercel.app',

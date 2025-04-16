@@ -16,10 +16,10 @@ class User(AbstractUser):
     
     # Email verification fields
     email_verified = models.BooleanField(default=False)
-    email_verification_token = models.UUIDField(default=uuid.uuid4, null=True, blank=True)
+    email_verification_token = models.CharField(max_length=10, null=True, blank=True)
     
     # Password reset field
-    password_reset_token = models.UUIDField(null=True, blank=True)
+    password_reset_token = models.CharField(max_length=10, null=True, blank=True)
     
     # Push notification token for mobile
     device_token = models.CharField(max_length=255, null=True, blank=True)

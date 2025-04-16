@@ -58,7 +58,7 @@ class UserLoginSerializer(serializers.Serializer):
     password = serializers.CharField(write_only=True, required=True, style={'input_type': 'password'})
 
 class EmailVerificationSerializer(serializers.Serializer):
-    token = serializers.UUIDField(required=True)
+    token = serializers.CharField(required=True)
 
 class DeviceTokenUpdateSerializer(serializers.Serializer):
     device_token = serializers.CharField(max_length=255)
@@ -67,7 +67,7 @@ class PasswordResetRequestSerializer(serializers.Serializer):
     email = serializers.EmailField(required=True)
 
 class PasswordResetConfirmSerializer(serializers.Serializer):
-    token = serializers.UUIDField(required=True)
+    token = serializers.CharField(required=True)
     new_password = serializers.CharField(min_length=8, write_only=True)
     confirm_password = serializers.CharField(min_length=8, write_only=True)
     

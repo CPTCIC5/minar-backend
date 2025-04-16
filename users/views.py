@@ -9,6 +9,8 @@ from django.contrib.auth import get_user_model, login, logout, authenticate, upd
 from django.utils import timezone
 from datetime import timedelta
 import uuid
+import random
+import string
 from django.conf import settings
 from django.core.mail import send_mail
 from django.template.loader import render_to_string
@@ -27,38 +29,47 @@ from .serializers import (
 
 User = get_user_model()
 
+def generate_otp(length=6):
+    """Generate a numeric OTP of specified length"""
+    return ''.join(random.choices(string.digits, k=length))
+
 class RegisterUserView(APIView):
     """Register a new user with email, phone, and other details"""
     permission_classes = [AllowAny]
+    authentication_classes = []
     
     def post(self, request):
         serializer = UserRegistrationSerializer(data=request.data)
         if serializer.is_valid():
             user = serializer.save()
             
-            # Send verification email
+            # Send verification email with OTP
             self.send_verification_email(user)
             
             return Response({
-                "detail": "User registered successfully. Please check your email to verify your account.",
+                "detail": "User registered successfully. Please check your email for verification OTP.",
                 "user": UserSerializer(user).data
             }, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
     def send_verification_email(self, user):
-        """Send verification email to the user"""
-        token = user.email_verification_token
-        verification_url = f"{settings.FRONTEND_URL}/verify-email?token={token}"
+        """Send verification email with OTP to the user"""
+        # Generate 6-digit OTP
+        otp = generate_otp()
+        
+        # Save OTP to user
+        user.email_verification_token = otp
+        user.save()
         
         subject = "Verify Your Email"
         message = f"""
         Hi {user.first_name},
         
-        Thank you for registering with us. Please verify your email by clicking the link below:
+        Thank you for registering with us. Please use the following verification code:
         
-        {verification_url}
+        {otp}
         
-        This link will expire in 24 hours.
+        This code will expire in 24 hours.
         
         If you did not register for an account, please ignore this email.
         """
@@ -77,19 +88,20 @@ class RegisterUserView(APIView):
             print(f"Failed to send verification email: {str(e)}")
 
 class VerifyEmailView(APIView):
-    """Verify user's email with token"""
+    """Verify user's email with OTP"""
     permission_classes = [AllowAny]
+    authentication_classes = []
     
     def post(self, request):
         serializer = EmailVerificationSerializer(data=request.data)
         if serializer.is_valid():
-            token = serializer.validated_data['token']
+            otp = serializer.validated_data['token']
             
             try:
-                user = User.objects.get(email_verification_token=token, email_verified=False)
+                user = User.objects.get(email_verification_token=otp, email_verified=False)
             except User.DoesNotExist:
                 return Response(
-                    {"detail": "Invalid or expired verification token"}, 
+                    {"detail": "Invalid or expired verification code"}, 
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
@@ -125,7 +137,7 @@ class LoginView(APIView):
                 # Resend verification email
                 self.resend_verification_email(user)
                 return Response(
-                    {"detail": "Email not verified. Verification email has been resent."},
+                    {"detail": "Email not verified. Verification code has been resent to your email."},
                     status=status.HTTP_401_UNAUTHORIZED
                 )
             
@@ -139,24 +151,21 @@ class LoginView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
     def resend_verification_email(self, user):
-        """Resend verification email to the user"""
-        # Regenerate token if needed
-        if not user.email_verification_token:
-            user.email_verification_token = uuid.uuid4()
-            user.save()
-        
-        token = user.email_verification_token
-        verification_url = f"{settings.FRONTEND_URL}/verify-email?token={token}"
+        """Resend verification email with OTP to the user"""
+        # Generate new OTP
+        otp = generate_otp()
+        user.email_verification_token = otp
+        user.save()
         
         subject = "Verify Your Email"
         message = f"""
         Hi {user.first_name},
         
-        Please verify your email by clicking the link below:
+        Please use the following code to verify your email:
         
-        {verification_url}
+        {otp}
         
-        This link will expire in 24 hours.
+        This code will expire in 24 hours.
         
         If you did not register for an account, please ignore this email.
         """
@@ -184,6 +193,7 @@ class LogoutView(APIView):
 class PasswordResetRequestView(APIView):
     """Request password reset via email"""
     permission_classes = [AllowAny]
+    authentication_classes = []
     
     def post(self, request):
         serializer = PasswordResetRequestSerializer(data=request.data)
@@ -194,25 +204,22 @@ class PasswordResetRequestView(APIView):
                 user = User.objects.get(email=email)
             except User.DoesNotExist:
                 # Don't reveal that the user doesn't exist
-                return Response({"detail": "Password reset email sent if account exists"})
+                return Response({"detail": "Password reset code sent if account exists"})
             
-            # Generate token
-            token = uuid.uuid4()
-            user.password_reset_token = token
+            # Generate OTP
+            otp = generate_otp()
+            user.password_reset_token = otp
             user.save()
-            
-            # Send password reset email
-            reset_url = f"{settings.FRONTEND_URL}/reset-password?token={token}"
             
             subject = "Reset Your Password"
             message = f"""
             Hi {user.first_name},
             
-            We received a request to reset your password. Click the link below to reset it:
+            We received a request to reset your password. Use the following code to reset it:
             
-            {reset_url}
+            {otp}
             
-            This link will expire in 24 hours.
+            This code will expire in 24 hours.
             
             If you did not request a password reset, please ignore this email.
             """
@@ -229,25 +236,26 @@ class PasswordResetRequestView(APIView):
                 # Log the error but don't reveal it to the user
                 print(f"Failed to send password reset email: {str(e)}")
             
-            return Response({"detail": "Password reset email sent if account exists"})
+            return Response({"detail": "Password reset code sent if account exists"})
         
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class PasswordResetConfirmView(APIView):
-    """Reset password using token"""
+    """Reset password using OTP"""
     permission_classes = [AllowAny]
+    authentication_classes = []
     
     def post(self, request):
         serializer = PasswordResetConfirmSerializer(data=request.data)
         if serializer.is_valid():
-            token = serializer.validated_data['token']
+            otp = serializer.validated_data['token']
             new_password = serializer.validated_data['new_password']
             
             try:
-                user = User.objects.get(password_reset_token=token)
+                user = User.objects.get(password_reset_token=otp)
             except User.DoesNotExist:
                 return Response(
-                    {"detail": "Invalid or expired token"}, 
+                    {"detail": "Invalid or expired code"}, 
                     status=status.HTTP_400_BAD_REQUEST
                 )
             

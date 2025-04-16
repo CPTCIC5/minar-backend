@@ -6,4 +6,7 @@ class SearchCreate(serializers.Serializer):
         fields= ['input_text']
 
 class SearchResponseSerializer(serializers.Serializer):
-    output = serializers.ListField()
+    output = serializers.JSONField()
+
+    class Meta:
+        fields= ['output']
